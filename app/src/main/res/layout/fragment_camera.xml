@@ -6,7 +6,7 @@
     android:layout_height="match_parent"
     android:keepScreenOn="true">
 
-    <TextureView
+    <sg.toru.customscanner.camera.AutoFitTextureView
         android:id="@+id/textureView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
