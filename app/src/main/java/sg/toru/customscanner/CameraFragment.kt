@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.*
 import android.hardware.camera2.*
+import android.media.ImageReader
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -21,21 +22,12 @@ import java.util.*
 import kotlin.collections.ArrayList
 
 class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCallback {
-    /**
-     * Max preview width that is guaranteed by Camera2 API
-     */
-    private val MAX_PREVIEW_WIDTH = 1920
-
-    /**
-     * Max preview height that is guaranteed by Camera2 API
-     */
-    private val MAX_PREVIEW_HEIGHT = 1080
-
     private lateinit var textureView: AutoFitTextureView
     private lateinit var cameraId:String
     private lateinit var cameraDevice: CameraDevice
     private lateinit var imageDimension: Size
     private lateinit var previewSize: Size
+    private var imageReader: ImageReader? = null
 
     private var backgroundHandler: Handler? = null
     private var backgroundThread: HandlerThread? = null
@@ -97,6 +89,16 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
         }
     }
 
+    private val imageAvailableListener = ImageReader.OnImageAvailableListener {
+        Log.i("CameraFragment", "imageAvailable")
+        val image = it.acquireLatestImage()
+        image ?: return@OnImageAvailableListener
+        val buffer = image.planes.first().buffer
+        val bytes = ByteArray(buffer.capacity())
+        Log.i("CameraFragment", "${bytes.size}")
+        buffer.get(bytes)
+        image.close()
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -127,6 +129,7 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
     }
 
     override fun onPause() {
+        stopCamera()
         stopBackgroundThread()
         super.onPause()
     }
@@ -175,6 +178,9 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             imageDimension = map?.getOutputSizes(SurfaceTexture::class.java)?.get(0)!!
 
+            setUpCameraOutputs(width, height)
+            configureTransform(width, height)
+
             // permission check
             if(ActivityCompat.checkSelfPermission(context!!, Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED){
@@ -183,8 +189,6 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
             }
             else{
                 // startCamera
-                configureTransform(width, height)
-                setUpCameraOutputs(width, height)
                 cameraManager.openCamera(cameraId, stateCallback,null)
             }
         }
@@ -194,7 +198,13 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
     }
 
     private fun stopCamera(){
-
+        try {
+            cameraDevice.close()
+            imageReader?.close()
+        } catch (e: InterruptedException) {
+            throw RuntimeException("Interrupted while trying to lock camera closing.", e)
+        } finally {
+        }
     }
 
     private lateinit var captureRequest:CaptureRequest
@@ -205,11 +215,12 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
     private fun createPreview(){
         try {
             val texture = textureView.surfaceTexture
-            texture.setDefaultBufferSize(imageDimension.width, imageDimension.height)
+            texture.setDefaultBufferSize(previewSize.width, previewSize.height)
             val surface = Surface(texture)
             captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
             captureRequestBuilder.addTarget(surface)
-            cameraDevice.createCaptureSession(listOf(surface), object:CameraCaptureSession.StateCallback(){
+            captureRequestBuilder.addTarget(imageReader!!.surface)
+            cameraDevice.createCaptureSession(listOf(surface, imageReader!!.surface), object:CameraCaptureSession.StateCallback(){
                 override fun onConfigureFailed(session: CameraCaptureSession) {}
 
                 override fun onConfigured(session: CameraCaptureSession) {
@@ -226,29 +237,33 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
     private fun updatePreview(){
         captureRequestBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO)
         try {
-            cameraCaptureSessions.setRepeatingRequest(captureRequestBuilder.build(), null, backgroundHandler)
+            cameraCaptureSessions.setRepeatingRequest(captureRequestBuilder.build(),null, backgroundHandler)
         } catch (e: CameraAccessException) {
             e.printStackTrace()
         }
     }
 
     private fun configureTransform(viewWidth: Int, viewHeight: Int) {
-        val activity = activity ?: return
-        val rotation = activity.windowManager.defaultDisplay.rotation
+        activity ?: return
+        val rotation = activity!!.windowManager.defaultDisplay.rotation
         val matrix = Matrix()
         val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-        val bufferRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        val bufferRect = RectF(0f, 0f, previewSize.height.toFloat(), previewSize.width.toFloat())
         val centerX = viewRect.centerX()
         val centerY = viewRect.centerY()
-        if (rotation == Surface.ROTATION_90
-            || rotation == Surface.ROTATION_270 ) {
+
+        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
             bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
-            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-            matrix.postScale(1F, 1F, centerX, centerY)
-            matrix.postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
-        }
-        else if (rotation == Surface.ROTATION_180) {
-            matrix.postRotate(180F, centerX, centerY)
+            val scale = Math.max(
+                viewHeight.toFloat() / previewSize.height,
+                viewWidth.toFloat() / previewSize.width)
+            with(matrix) {
+                setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+                postScale(scale, scale, centerX, centerY)
+                postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
+            }
+        } else if (Surface.ROTATION_180 == rotation) {
+            matrix.postRotate(180f, centerX, centerY)
         }
         textureView.setTransform(matrix)
     }
@@ -307,13 +322,9 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
                     CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: continue
 
                 // For still image captures, we use the largest available size.
-                val largest = Collections.max(
-                    listOf(*map.getOutputSizes(ImageFormat.JPEG)),
-                    CompareSizesByArea())
-//                imageReader = ImageReader.newInstance(largest.width, largest.height,
-//                    ImageFormat.JPEG, /*maxImages*/ 2).apply {
-//                    setOnImageAvailableListener(onImageAvailableListener, backgroundHandler)
-//                }
+//                val largest = Collections.max(
+//                    listOf(*map.getOutputSizes(ImageFormat.YUV_420_888)),
+//                    CompareSizesByArea())
 
                 // Find out if we need to swap dimension to get the preview size relative to sensor
                 // coordinate.
@@ -328,16 +339,26 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
                 var maxPreviewWidth = if (swappedDimensions) displaySize.y else displaySize.x
                 var maxPreviewHeight = if (swappedDimensions) displaySize.x else displaySize.y
 
-                if (maxPreviewWidth > MAX_PREVIEW_WIDTH) maxPreviewWidth = MAX_PREVIEW_WIDTH
-                if (maxPreviewHeight > MAX_PREVIEW_HEIGHT) maxPreviewHeight = MAX_PREVIEW_HEIGHT
+//                if (maxPreviewWidth > MAX_PREVIEW_WIDTH) maxPreviewWidth = MAX_PREVIEW_WIDTH
+//                if (maxPreviewHeight > MAX_PREVIEW_HEIGHT) maxPreviewHeight = MAX_PREVIEW_HEIGHT
 
                 // Danger, W.R.! Attempting to use too large a preview size could exceed the camera
                 // bus' bandwidth limitation, resulting in gorgeous previews but the storage of
                 // garbage capture data.
-                previewSize = chooseOptimalSize(map.getOutputSizes(SurfaceTexture::class.java),
-                    rotatedPreviewWidth, rotatedPreviewHeight,
-                    maxPreviewWidth, maxPreviewHeight,
-                    largest)
+//                previewSize = chooseOptimalSize(map.getOutputSizes(SurfaceTexture::class.java),
+//                    rotatedPreviewWidth, rotatedPreviewHeight,
+//                    maxPreviewWidth, maxPreviewHeight,
+//                    largest)
+
+                previewSize = Size(maxPreviewWidth, maxPreviewHeight)
+                imageReader = ImageReader.newInstance(
+                    previewSize.width,
+                    previewSize.height,
+                    ImageFormat.YUV_420_888,
+                    1)
+                    .apply {
+                        setOnImageAvailableListener(imageAvailableListener, backgroundHandler)
+                    }
 
                 // We fit the aspect ratio of TextureView to the size of preview we picked.
                 if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
