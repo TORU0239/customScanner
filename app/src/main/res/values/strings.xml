@@ -1,11 +1,11 @@
 <resources>
-	<string name="app_name">customScanner</string>
+    <string name="app_name">customScanner</string>
 
-	<string name="cd_settings_button">Settings</string>
-	<string name="cd_close_button">Back</string>
-	<string name="cd_flash_button">Toggle camera flash</string>
-	<string name="cd_photo_library_button">Upload image</string>
+    <string name="cd_settings_button">Settings</string>
+    <string name="cd_close_button">Back</string>
+    <string name="cd_flash_button">Toggle camera flash</string>
+    <string name="cd_photo_library_button">Upload image</string>
 
-	<!-- TODO: Remove or change this placeholder text -->
+    <!-- TODO: Remove or change this placeholder text -->
     <string name="hello_blank_fragment">Hello blank fragment</string>
 </resources>
