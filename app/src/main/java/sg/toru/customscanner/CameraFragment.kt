@@ -16,6 +16,9 @@ import android.view.*
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.fragment.app.Fragment
+import com.google.firebase.ml.vision.FirebaseVision
+import com.google.firebase.ml.vision.common.FirebaseVisionImage
+import com.google.firebase.ml.vision.common.FirebaseVisionImageMetadata
 import sg.toru.customscanner.camera.AutoFitTextureView
 import sg.toru.customscanner.camera.CompareSizesByArea
 import java.util.*
@@ -90,14 +93,55 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
     }
 
     private val imageAvailableListener = ImageReader.OnImageAvailableListener {
-        Log.i("CameraFragment", "imageAvailable")
         val image = it.acquireLatestImage()
         image ?: return@OnImageAvailableListener
-        val buffer = image.planes.first().buffer
-        val bytes = ByteArray(buffer.capacity())
-        Log.i("CameraFragment", "${bytes.size}")
-        buffer.get(bytes)
+
+        if(image.planes.size >= 3){
+            val y = image.planes[0].buffer
+            val u = image.planes[1].buffer
+            val v = image.planes[2].buffer
+            val ly = y.remaining()
+            val lu = u.remaining()
+            val lv = v.remaining()
+
+            val dataYUV = ByteArray(ly + lu + lv)
+            y.get(dataYUV, 0, ly)
+            u.get(dataYUV, ly, lu)
+            v.get(dataYUV, ly + lu, lv)
+            val fireBaseImage = FirebaseVisionImage.fromByteArray(dataYUV, metadata)
+            initTextRecognizer(fireBaseImage)
+        }
         image.close()
+
+//        val buffer = image.planes.first().buffer
+//        val bytes = ByteArray(buffer.capacity())
+//        buffer.get(bytes)
+//        image.close()
+//        val fireBaseImage = FirebaseVisionImage.fromByteBuffer(buffer, metadata)
+//        initTextRecognizer(fireBaseImage)
+    }
+
+    private val recognizer by lazy {
+        FirebaseVision.getInstance().onDeviceTextRecognizer
+    }
+
+    private val metadata by lazy {
+        FirebaseVisionImageMetadata.Builder()
+            .setWidth(360)
+            .setHeight(480)
+            .setFormat(FirebaseVisionImageMetadata.IMAGE_FORMAT_YV12)
+            .build()
+    }
+
+    private fun initTextRecognizer(image:FirebaseVisionImage){
+        recognizer.processImage(image)
+            .addOnSuccessListener { texts ->
+                Log.e("CameraFragment", "text:: ${texts.text}")
+            }
+            .addOnFailureListener { e ->
+                // Task failed with an exception
+                e.printStackTrace()
+            }
     }
 
     override fun onCreateView(
@@ -352,10 +396,10 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
 
                 previewSize = Size(maxPreviewWidth, maxPreviewHeight)
                 imageReader = ImageReader.newInstance(
-                    previewSize.width,
-                    previewSize.height,
+                    720,
+                    1280,
                     ImageFormat.YUV_420_888,
-                    1)
+                    2)
                     .apply {
                         setOnImageAvailableListener(imageAvailableListener, backgroundHandler)
                     }
@@ -401,7 +445,6 @@ class CameraFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCall
         }
         return swappedDimensions
     }
-
 
     companion object{
         @JvmStatic
