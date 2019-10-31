@@ -12,7 +12,7 @@ class MainActivity : AppCompatActivity() {
         supportFragmentManager.beginTransaction()
             .replace(
                 R.id.container_fragment,
-                CameraFragment.newInstance()
+                CameraXFragment.newInstance()
             ).commit()
     }
 }
