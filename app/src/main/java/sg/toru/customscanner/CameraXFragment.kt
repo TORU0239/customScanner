@@ -3,6 +3,8 @@ package sg.toru.customscanner
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.RectF
 import android.os.Bundle
 import android.util.DisplayMetrics
 import android.util.Log
@@ -13,7 +15,16 @@ import androidx.fragment.app.Fragment
 import android.widget.Toast
 import androidx.camera.core.*
 import androidx.core.app.ActivityCompat
+import com.google.firebase.ml.vision.FirebaseVision
+import com.google.firebase.ml.vision.common.FirebaseVisionImage
+import com.google.firebase.ml.vision.common.FirebaseVisionImageMetadata
+import com.google.firebase.ml.vision.text.FirebaseVisionText
+import com.google.firebase.ml.vision.text.FirebaseVisionTextRecognizer
+import java.nio.ByteBuffer
+import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlin.collections.ArrayList
 
 /**
  * A simple [Fragment] subclass.
@@ -70,35 +81,6 @@ class CameraXFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCal
         }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
-    /*
-    * private fun startCamera() {
-        val previewConfig = PreviewConfig.Builder()
-            // We want to show input from back camera of the device
-            .setLensFacing(CameraX.LensFacing.BACK)
-            .build()
-
-        val preview = Preview(previewConfig)
-
-        preview.setOnPreviewOutputUpdateListener { previewOutput ->
-            textureView.surfaceTexture = previewOutput.surfaceTexture
-        }
-
-        val imageAnalysisConfig = ImageAnalysisConfig.Builder()
-            .build()
-        val imageAnalysis = ImageAnalysis(imageAnalysisConfig)
-
-        val qrCodeAnalyzer = QrCodeAnalyzer { qrCodes ->
-            qrCodes.forEach {
-                Log.d("MainActivity", "QR Code detected: ${it.rawValue}.")
-            }
-        }
-
-        imageAnalysis.analyzer = qrCodeAnalyzer
-
-        // We need to bind preview and imageAnalysis use cases
-        CameraX.bindToLifecycle(this as LifecycleOwner, preview, imageAnalysis)
-    }
-    * */
 
     private fun startCamera(){
         // Get screen metrics used to setup camera for full screen resolution
@@ -111,7 +93,6 @@ class CameraXFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCal
         val previewConfig = PreviewConfig
                                             .Builder()
                                             .setLensFacing(lensFacing)
-//                                            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                                             .setTargetResolution(Size(metrics.widthPixels, metrics.heightPixels))
                                             .setTargetRotation(textureView.display.rotation)
                                             .build()
@@ -125,7 +106,16 @@ class CameraXFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCal
             textureView.surfaceTexture = previewOutput.surfaceTexture
             updateTransform()
         }
-        CameraX.bindToLifecycle(this, preview)
+
+        val imageAnalyzerConfig
+                = ImageAnalysisConfig.Builder()
+                    .setBackgroundExecutor(executor)
+                    .build()
+
+        val imageAnalyzer = ImageAnalysis(imageAnalyzerConfig).apply {
+            setAnalyzer(executor, LuminosityAnalyzer())
+        }
+        CameraX.bindToLifecycle(this, preview, imageAnalyzer)
     }
 
     private fun updateTransform() {
@@ -163,5 +153,73 @@ class CameraXFragment : Fragment(), ActivityCompat.OnRequestPermissionsResultCal
     companion object{
         @JvmStatic
         fun newInstance() = CameraXFragment()
+    }
+}
+
+class LuminosityAnalyzer :ImageAnalysis.Analyzer{
+    private val frameRateWindow = 8
+    private val frameTimestamps = ArrayDeque<Long>(5)
+    private var lastAnalyzedTimestamp = 0L
+    var framesPerSecond: Double = -1.0
+        private set
+
+
+    private val detector:FirebaseVisionTextRecognizer = FirebaseVision.getInstance().onDeviceTextRecognizer
+
+    private fun ByteBuffer.toByteArray():ByteArray{
+        rewind()
+        val data = ByteArray(remaining())
+        get(data)
+        return data
+    }
+
+    private fun degreesToFirebaseRotation(degrees: Int): Int = when(degrees) {
+        0 -> FirebaseVisionImageMetadata.ROTATION_0
+        90 -> FirebaseVisionImageMetadata.ROTATION_90
+        180 -> FirebaseVisionImageMetadata.ROTATION_180
+        270 -> FirebaseVisionImageMetadata.ROTATION_270
+        else -> throw Exception("Rotation must be 0, 90, 180, or 270.")
+    }
+
+    private fun translateRect(rect: Rect) = RectF(
+        rect.left.toFloat(),
+        rect.top.toFloat(),
+        rect.right.toFloat(),
+        rect.bottom.toFloat()
+    )
+
+    override fun analyze(
+        image: ImageProxy?,
+        rotationDegrees: Int
+    ) {
+        // Keep track of frames analyzed
+        frameTimestamps.push(System.currentTimeMillis())
+
+        // Compute the FPS using a moving average
+        while (frameTimestamps.size >= frameRateWindow) frameTimestamps.removeLast()
+        framesPerSecond = 1.0 / ((frameTimestamps.peekFirst() - frameTimestamps.peekLast())  / frameTimestamps.size.toDouble()) * 1000.0
+
+        if (frameTimestamps.first - lastAnalyzedTimestamp >= TimeUnit.SECONDS.toMillis(1)) {
+            lastAnalyzedTimestamp = frameTimestamps.first
+
+            image?.let {
+                val firebaseImage = FirebaseVisionImage.fromMediaImage(it.image!!, degreesToFirebaseRotation(rotationDegrees))
+                detector.processImage(firebaseImage).addOnCompleteListener { textTask ->
+                    textTask.result?.let { firebaseVisionText ->
+                        Log.e("TORU", "result:: ${firebaseVisionText.text }, line: ${firebaseVisionText.textBlocks.size}")
+//                        val textCentered = firebaseVisionText.textBlocks.firstOrNull { textBlock ->
+//                            val boundingBox = textBlock.boundingBox ?: return@firstOrNull false
+//                            val box = translateRect(boundingBox)
+//                            box.contains(720f / 2f, 2560 / 2f)
+//                        }
+//
+//                        if(textCentered != null){
+//                            Log.e("TORU", "result:: ${textCentered.text }, line: ${textCentered.lines.size}")
+//                        }
+                    }
+
+                }.addOnFailureListener {}
+            }
+        }
     }
 }
