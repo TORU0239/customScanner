@@ -47,10 +47,49 @@ class PassportFragment : Fragment() {
             number += 1
         }
         val surname = name.substring(0, number)
-        val givenName = name.substring(number, name.length).filter { c ->
-            c != '<'
+
+        var number2 = 0
+        for( c in name){
+            if(c == '<'){
+                break
+            }
+            number2+= 1
         }
-        textview.text = "country: $country,\nsurname: $surname,\ngiven name: $givenName"
+
+        val givenName = name.substring(number+2, name.length)
+
+        var number3 = 0
+        for( c in givenName){
+            if(c == '<'){
+                break
+            }
+            number3+= 1
+        }
+
+        textview.text = "country: $country,\nsurname: $surname,\ngiven name: ${extractGivenName(givenName)}"
+    }
+
+    private fun extractGivenName(givenName:String):String{
+        val arr = givenName.toCharArray()
+        val list = ArrayList<Int>()
+        arr.forEachIndexed { index, c ->
+            if(c == '<'){
+                if(index > 0 && arr[index -1] != '<') run {
+                    Log.i("Toru", "indx:: $index")
+                    list.add(index)
+                }
+            }
+        }
+
+        var prev = 0
+        var name = ""
+        list.forEach { idx ->
+            val test = givenName.substring(prev, idx)
+            prev = idx + 1
+            Log.i("Toru", "given Name: $test")
+            name = name.plus(" $test")
+        }
+        return name
     }
 
     private fun determinePassportInfo(fullRead:String, textview:TextView){
