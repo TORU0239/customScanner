@@ -9,10 +9,11 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        val passportSample = "USE YOUR OWN PASSPORT"
         supportFragmentManager.beginTransaction()
             .replace(
                 R.id.container_fragment,
-                CameraXFragment.newInstance()
+                PassportFragment.newInstance(passportSample)
             ).commit()
     }
 }
