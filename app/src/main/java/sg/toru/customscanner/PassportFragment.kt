@@ -18,6 +18,8 @@ class PassportFragment : Fragment() {
         arguments?.getString(KEY)?:""
     }
 
+    private lateinit var passportMrz:TextView
+
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
@@ -32,6 +34,8 @@ class PassportFragment : Fragment() {
     ) {
         super.onViewCreated(view, savedInstanceState)
         val text = view.findViewById<TextView>(R.id.txt_passport)
+        passportMrz = view.findViewById(R.id.txt_passport_mrz)
+        passportMrz.text = passportInfo
         determinePassportInfo(passportInfo, text)
     }
 
